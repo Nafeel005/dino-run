@@ -2,7 +2,7 @@
 
 A browser endless runner inspired by Chrome's offline dinosaur game. It's plain HTML, CSS and JavaScript with no build step and no dependencies. It deploys to Vercel through a GitHub Actions CI/CD pipeline.
 
-**Live:** https://dino-run-phi.vercel.app
+**Live:** https://dino-run-psi.vercel.app
 
 - Jump over cacti and duck under birds
 - The game speeds up the longer you survive
@@ -221,7 +221,7 @@ gh run watch
 
 ```bash
 git rev-parse HEAD
-curl -s https://dino-run-phi.vercel.app | grep -o 'data-commit="[^"]*"'
+curl -s https://dino-run-psi.vercel.app | grep -o 'data-commit="[^"]*"'
 ```
 
 The two SHAs should match. You can also check the footer on the live page, which links to the commit and to the pipeline run that deployed it.
