@@ -4,7 +4,7 @@
   // Gameplay tuning
   const CONFIG = {
     // 👋 Change this to your GitHub username, push, and look for it on the live game screen
-    githubUsername: 'thivindu',
+    githubUsername: 'Nafeel005',
 
     startSpeed: 6,
     maxSpeed: 13,
