@@ -113,7 +113,15 @@
     if (muted) return;
     try {
       audio = audio || new (window.AudioContext || window.webkitAudioContext)();
-      if (audio.state === 'suspended') audio.resume();
+      if (audio.state === 'suspended') {
+        // Sound is optional: resume() rejects when blocked outside a user
+        // gesture, so swallow the rejection instead of triggering an
+        // unhandled promise rejection warning.
+        try {
+          const resumed = audio.resume();
+          if (resumed && typeof resumed.catch === 'function') resumed.catch(() => {});
+        } catch { /* ignore sync resume errors */ }
+      }
       const osc = audio.createOscillator();
       const gain = audio.createGain();
       osc.type = 'square';
@@ -466,7 +474,6 @@
       }
     }
 
-    updateParticles(dt);
     checkMissions();
 
     // collision (skip while briefly invulnerable after shield save)
@@ -904,6 +911,11 @@
     const dt = Math.min((now - last) / (1000 / 60), 3); // normalised to 60fps
     last = now;
     update(dt);
+    // Cosmetic-only layer: particles/floaters advance exactly once per frame
+    // in every state (ready/paused/over) so toasts from Share/Mute/missions
+    // still expire. Score, obstacles, and physics stay frozen while paused
+    // because update() above early-returns unless state === 'running'.
+    updateParticles(dt);
     draw();
     requestAnimationFrame(loop);
   }
@@ -932,13 +944,50 @@
   const JUMP_KEYS = ['Space', 'ArrowUp', 'KeyW'];
   const DUCK_KEYS = ['ArrowDown', 'KeyS'];
 
+  // Duck hold is the union of global-keyboard / Duck-button-pointer /
+  // Duck-button-keyboard / touch-swipe holds, so releasing one source never
+  // sticks or prematurely clears another.
+  const duckKeysHeld = new Set();
+  const jumpKeysHeld = new Set();
+  let duckPointerHeld = false;
+  let duckButtonKeyHeld = false;
+  let touchDuckHeld = false;
+  function syncDuck() {
+    dino.ducking = duckKeysHeld.size > 0 || duckPointerHeld || duckButtonKeyHeld || touchDuckHeld;
+  }
+  function clearDuckHolds() {
+    duckKeysHeld.clear();
+    duckPointerHeld = false;
+    duckButtonKeyHeld = false;
+    touchDuckHeld = false;
+    if (dino) syncDuck();
+  }
+
+  function isInteractiveControl(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el === canvas || el === document.body || el === document.documentElement) return false;
+    if (el.isContentEditable) return true;
+    if (typeof el.closest !== 'function') return false;
+    return !!el.closest('button, a[href], input, textarea, select, [contenteditable], [role="button"], [role="link"]');
+  }
+
   document.addEventListener('keydown', (e) => {
+    // Gameplay shortcuts only fire when the page or canvas has focus. A
+    // focused button, link, editable field, or other interactive control
+    // keeps its normal keyboard behavior (Space/Enter activate, typing
+    // works, arrows move within the control). Tab/Shift+Tab are never
+    // intercepted.
+    if (isInteractiveControl(e.target)) return;
     if (JUMP_KEYS.includes(e.code)) {
       e.preventDefault();
-      if (!e.repeat) primaryAction();
+      if (!e.repeat) {
+        jumpKeysHeld.add(e.code);
+        primaryAction();
+      }
     } else if (DUCK_KEYS.includes(e.code)) {
       e.preventDefault();
-      dino.ducking = true;
+      duckKeysHeld.add(e.code);
+      syncDuck();
     } else if (e.code === 'KeyP' || e.code === 'Escape') {
       e.preventDefault();
       togglePause();
@@ -948,8 +997,24 @@
   });
 
   document.addEventListener('keyup', (e) => {
-    if (DUCK_KEYS.includes(e.code)) dino.ducking = false;
-    if (JUMP_KEYS.includes(e.code)) cutJump();
+    // Always release duck keys (even when focus moved mid-hold) so the
+    // dino is never left stuck ducking.
+    if (DUCK_KEYS.includes(e.code)) {
+      if (duckKeysHeld.has(e.code)) {
+        duckKeysHeld.delete(e.code);
+        syncDuck();
+      }
+    }
+    if (JUMP_KEYS.includes(e.code)) {
+      // Only shorten a jump this listener actually started. A keydown
+      // ignored on a focused control (e.g. Space for a keyboard click on
+      // the Jump button) leaves no trace here, so its jump keeps full
+      // height instead of being cut by its own keyup.
+      if (jumpKeysHeld.has(e.code)) {
+        jumpKeysHeld.delete(e.code);
+        cutJump();
+      }
+    }
   });
 
   // touch: tap = jump, swipe-down-hold = duck
@@ -967,12 +1032,16 @@
   canvas.addEventListener('touchmove', (e) => {
     if (touchStartY == null) return;
     const t = e.touches[0];
-    if (t.clientY - touchStartY > 24) dino.ducking = true;
+    if (t.clientY - touchStartY > 24) {
+      touchDuckHeld = true;
+      syncDuck();
+    }
   }, { passive: true });
   canvas.addEventListener('touchend', () => {
     touchStartY = null;
     touchStartX = null;
-    dino.ducking = false;
+    touchDuckHeld = false;
+    syncDuck();
     cutJump();
   });
 
@@ -980,6 +1049,13 @@
     if (document.hidden && state === 'running') togglePause();
   });
   window.addEventListener('blur', () => {
+    // A key released while the window is blurred never produces keyup, so
+    // drop any tracked jump without shortening anything new.
+    if (jumpKeysHeld.size > 0) {
+      jumpKeysHeld.clear();
+      cutJump();
+    }
+    clearDuckHolds();
     if (state === 'running') togglePause();
   });
 
@@ -1011,14 +1087,35 @@
     if (pb) pb.addEventListener('click', (e) => { e.preventDefault(); togglePause(); canvas.focus(); });
     if (mb) mb.addEventListener('click', (e) => { e.preventDefault(); toggleMute(); canvas.focus(); });
     if (sb) sb.addEventListener('click', (e) => { e.preventDefault(); shareScore(); canvas.focus(); });
-    if (jb) jb.addEventListener('pointerdown', (e) => { e.preventDefault(); primaryAction(); });
+    // Jump: pointerdown gives instant touch/mouse response; click handles
+    // keyboard activation (Space/Enter). Pointer clicks carry detail > 0, so
+    // only detail === 0 (keyboard) fires here — no double jump on tap/click.
+    if (jb) {
+      jb.addEventListener('pointerdown', (e) => { e.preventDefault(); primaryAction(); });
+      jb.addEventListener('click', (e) => { if (e.detail === 0) primaryAction(); });
+    }
     if (db) {
-      const on = (e) => { e.preventDefault(); dino.ducking = true; };
-      const off = (e) => { e.preventDefault(); dino.ducking = false; };
-      db.addEventListener('pointerdown', on);
-      db.addEventListener('pointerup', off);
-      db.addEventListener('pointercancel', off);
-      db.addEventListener('pointerleave', off);
+      // Pointer and keyboard holds are tracked independently: releasing the
+      // pointer never cancels a keyboard hold and vice versa.
+      const pointerOn = (e) => { e.preventDefault(); duckPointerHeld = true; syncDuck(); };
+      const pointerOff = (e) => { if (e) e.preventDefault(); duckPointerHeld = false; syncDuck(); };
+      const keyOff = () => { duckButtonKeyHeld = false; syncDuck(); };
+      db.addEventListener('pointerdown', pointerOn);
+      db.addEventListener('pointerup', pointerOff);
+      db.addEventListener('pointercancel', pointerOff);
+      db.addEventListener('pointerleave', pointerOff);
+      // Keyboard hold on the focused Duck button (the global listener skips
+      // focused controls so native activation still works). Click itself is
+      // a no-op for hold semantics — key up always releases.
+      db.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+          if (!e.repeat) { duckButtonKeyHeld = true; syncDuck(); }
+        }
+      });
+      db.addEventListener('keyup', (e) => {
+        if (e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter') keyOff();
+      });
+      db.addEventListener('blur', keyOff);
     }
   }
 

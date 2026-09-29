@@ -20,7 +20,11 @@
     </header>
 
     <div class="stage">
-      <canvas id="game" aria-label="Dino jumping game. Press space or tap to jump." role="img" tabindex="0"></canvas>
+      <!-- role="application": the canvas is an interactive game surface that
+        handles Space/Arrow/P/M keys when focused. "img" would wrongly imply
+        static content. tabindex="0" keeps it in natural Tab/Shift+Tab order
+        (no key trapping); aria-describedby links it to the visible controls. -->
+      <canvas id="game" role="application" aria-label="Dino jumping game. Press space or tap to jump." aria-describedby="controls-help" tabindex="0"></canvas>
     </div>
 
     <div class="game-bar">
@@ -34,7 +38,7 @@
       <button id="btn-jump" type="button" aria-label="Tap to jump, twice for double jump">▲ JUMP</button>
     </div>
 
-    <p class="controls">
+    <p class="controls" id="controls-help">
       <kbd>Space</kbd> / <kbd>↑</kbd> jump (hold = higher) &nbsp;·&nbsp; <kbd>↓</kbd> duck &nbsp;·&nbsp; <kbd>P</kbd> pause &nbsp;·&nbsp; <kbd>M</kbd> mute &nbsp;·&nbsp; tap to jump on mobile, swipe down to duck
     </p>
 
